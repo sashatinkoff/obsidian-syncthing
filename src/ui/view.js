@@ -13,6 +13,8 @@ const { renderListTab } = require('./list-tab');
 const { renderMergeTab } = require('./merge-tab');
 const { renderJournalTab } = require('./journal-tab');
 const { renderStatsTab } = require('./stats-tab');
+const { updateProgress } = require('./bulk-panel');
+const { CATEGORIES } = require('../io/bulk');
 
 const ACTION_TEXT = {
   keep: 'Оставлена текущая версия',
@@ -27,7 +29,7 @@ class ConflictView extends ItemView {
     this.core = core;
     this.tab = 'list';
     this.session = null;
-    this.listState = { query: '', filter: 'all', source: null, selected: new Set() };
+    this.listState = { query: '', filter: 'all', source: null, selected: new Set(), limit: 50 };
     this.statsState = { period: 30 };
     this.navigation = true;
   }
@@ -37,7 +39,7 @@ class ConflictView extends ItemView {
   getIcon() { return ICON; }
 
   async onOpen() {
-    this.unsubscribe = this.core.subscribe(() => this.onScanUpdated());
+    this.unsubscribe = this.core.subscribe((kind) => this.onScanUpdated(kind));
     this.render();
     if (!this.core.scan && !this.core.scanning) this.core.rescan();
   }
@@ -54,9 +56,28 @@ class ConflictView extends ItemView {
 
   isNarrow() { return this.contentEl.clientWidth > 0 && this.contentEl.clientWidth < 820; }
 
-  onScanUpdated() {
+  onScanUpdated(kind) {
+    if (kind === 'progress') {
+      // Ход анализа / массового действия: двигаем полосу, не трогая остальное
+      this.updateSubtitle();
+      if (this.tab === 'list' && updateProgress(this.bodyEl, this.core)) return;
+      if (this.tab === 'list' && this.core.bulk.state && !this.bodyEl.querySelector('[data-bulk-fill]')) this.rerender(true);
+      return;
+    }
     this.renderHeader();
     if (this.tab !== 'merge') this.rerender(true);
+  }
+
+  subtitleText() {
+    const st = this.core.bulk.state;
+    if (st) return `${st.label}: ${Math.round((st.done / Math.max(1, st.total)) * 100)}%`;
+    const scan = this.core.scan;
+    return this.core.scanning ? 'Проверяю…' : scan ? `Проверено ${formatDate(scan.scannedAt)}` : 'Ещё не проверялось';
+  }
+
+  updateSubtitle() {
+    const el = this.headerEl && this.headerEl.querySelector('.scr-brand-sub');
+    if (el) el.setText(this.subtitleText());
   }
 
   render() {
@@ -81,7 +102,7 @@ class ConflictView extends ItemView {
     const scan = this.core.scan;
     bt.createDiv({
       cls: 'scr-brand-sub',
-      text: this.core.scanning ? 'Проверяю…' : scan ? `Проверено ${formatDate(scan.scannedAt)}` : 'Ещё не проверялось',
+      text: this.subtitleText(),
     });
 
     const tabs = h.createDiv('scr-tabs');
@@ -90,7 +111,7 @@ class ConflictView extends ItemView {
       const t = tabs.createEl('button', { cls: ['scr-tab'].concat(this.tab === id ? ['is-active'] : []) });
       icon(t, ico);
       t.createSpan({ text: label });
-      if (badge) t.createSpan({ cls: 'scr-tab-badge', text: String(badge) });
+      if (badge) t.createSpan({ cls: 'scr-tab-badge', text: badge.toLocaleString('ru-RU') });
       t.addEventListener('click', () => this.setTab(id));
     };
     tab('list', 'Конфликты', 'list', count);
@@ -272,6 +293,75 @@ class ConflictView extends ItemView {
   async cleanIdentical() {
     const n = await this.core.cleanIdentical(true);
     if (n !== null) this.rerender();
+  }
+
+  removeModeText() {
+    const m = this.core.settings.removeMode;
+    return m === 'delete' ? 'будут удалены насовсем' : m === 'system' ? 'уйдут в системную корзину' : 'уйдут в корзину Obsidian (.trash)';
+  }
+
+  /** Пакетное действие над целой категорией. */
+  async runBulk(category, action) {
+    const core = this.core;
+    if (core.bulk.running) return;
+    const n = core.bulk.items(category).length;
+    if (!n) return;
+    const meta = CATEGORIES[category];
+    const act = meta.actions.find((a) => a.id === action);
+    const what = {
+      remove: `Текущие файлы не меняются, конфликтные копии ${this.removeModeText()}.`,
+      take: `Содержимое файлов заменится версиями из копий, копии ${this.removeModeText()}. Если у файла несколько копий, берётся самая свежая.`,
+      merge: `Файлы перезапишутся результатом трёхстороннего слияния, копии ${this.removeModeText()}.`,
+      restore: 'Копии переименуются обратно в исходные имена (самая свежая копия для каждого файла).',
+      both: 'Копии останутся рядом с файлами под понятными именами: «имя (устройство дата)».',
+    }[action];
+    const ok = await confirm(this.app, {
+      title: `${meta.label}: ${act.text.toLowerCase()}?`,
+      text: `Будет обработано ${n.toLocaleString('ru-RU')} ${plural(n, 'копия', 'копии', 'копий')}. ${what}`,
+      confirm: act.text,
+      danger: action === 'take' || action === 'merge',
+    });
+    if (!ok) return;
+    const r = await core.bulk.run(category, action);
+    this.reportBulk([[meta.label, action, r]]);
+    await core.rescan();
+  }
+
+  /** Все безопасные категории подряд. */
+  async runSafe(plan) {
+    const core = this.core;
+    if (core.bulk.running) return;
+    const todo = plan.filter(([c]) => core.bulk.items(c).length);
+    const total = todo.reduce((n, [c]) => n + core.bulk.items(c).length, 0);
+    const lines = todo.map(([c, a]) => `• ${CATEGORIES[c].label} — ${core.bulk.items(c).length.toLocaleString('ru-RU')}: ${CATEGORIES[c].actions.find((x) => x.id === a).text.toLowerCase()}`);
+    const ok = await confirm(this.app, {
+      title: `Разобрать ${total.toLocaleString('ru-RU')} ${plural(total, 'копию', 'копии', 'копий')}?`,
+      text: `${lines.join('\n')}\n\nНичего не теряется: в каждом случае остаётся версия, в которой есть всё. Убранные копии ${this.removeModeText()}.`,
+      confirm: 'Разобрать',
+    });
+    if (!ok) return;
+    const results = [];
+    for (const [c, a] of todo) {
+      const r = await core.bulk.run(c, a);
+      results.push([CATEGORIES[c].label, a, r]);
+      if (r.cancelled) break;
+    }
+    this.reportBulk(results);
+    await core.rescan();
+  }
+
+  reportBulk(results) {
+    const ok = results.reduce((n, [, , r]) => n + r.ok, 0);
+    const failed = results.reduce((n, [, , r]) => n + r.failed, 0);
+    const skipped = results.reduce((n, [, , r]) => n + r.skipped, 0);
+    const cancelled = results.some(([, , r]) => r.cancelled);
+    const parts = [`Готово: ${ok.toLocaleString('ru-RU')}`];
+    if (skipped) parts.push(`отложено ${skipped} (у файла несколько копий — пересчитаются)`);
+    if (failed) parts.push(`ошибок ${failed}`);
+    if (cancelled) parts.push('остановлено');
+    new Notice(parts.join(' · '), 8000);
+    const errors = results.flatMap(([, , r]) => r.errors);
+    if (errors.length) console.warn('[Syncthing Conflict Resolver] ошибки массового разбора:\n' + errors.join('\n'));
   }
 }
 

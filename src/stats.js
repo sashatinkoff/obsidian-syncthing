@@ -10,6 +10,14 @@ const { dirname, pad } = require('./util');
 
 const DAY = 864e5;
 const MAX_DETECTED = 3000;
+const MASS_THRESHOLD = 200; // больше новых копий за один скан — пишем сводными записями
+
+/** Короткий хэш ключа копии (FNV-1a), чтобы список «уже видели» не раздувал data.json. */
+function hashKey(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+}
 
 function dayKey(t) {
   const d = new Date(t);
@@ -21,7 +29,7 @@ function countBy(list, keyFn) {
   for (const x of list) {
     const k = keyFn(x);
     if (k === null || k === undefined) continue;
-    m.set(k, (m.get(k) || 0) + 1);
+    m.set(k, (m.get(k) || 0) + (x.n || 1));
   }
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
@@ -58,16 +66,16 @@ class Stats {
    * исчезнувшие (решённые) забываются — но только у папок, которые просканировались без ошибок.
    */
   recordScan(scan) {
-    const okSources = new Set((scan.sources || []).filter((s) => s.ok).map((s) => s.id));
+    const allOk = (scan.sources || []).every((s) => s.ok);
     const current = new Set();
-    let added = 0;
+    const fresh = [];
     for (const g of scan.groups) {
       for (const c of g.copies) {
-        const key = `${g.source.id}::${c.path}`;
+        const key = hashKey(`${g.source.id}::${c.path}`);
         current.add(key);
         if (this.seen.has(key)) continue;
         this.seen.add(key);
-        this.detected.unshift({
+        fresh.push({
           t: Date.now(),
           copyTime: c.time.getTime(),
           path: g.path,
@@ -76,15 +84,26 @@ class Stats {
           source: g.source.label,
           kind: g.kind,
         });
-        added++;
       }
     }
-    for (const key of [...this.seen]) {
-      const sid = key.slice(0, key.indexOf('::'));
-      if (!current.has(key) && okSources.has(sid)) this.seen.delete(key);
+
+    if (fresh.length > MASS_THRESHOLD) {
+      // Массовый наплыв: одна запись на (устройство, папка, тип) с количеством
+      const agg = new Map();
+      for (const e of fresh) {
+        const k = `${e.device}|${e.source}|${e.folder}|${e.kind}`;
+        const a = agg.get(k);
+        if (a) { a.n++; a.copyTime = Math.min(a.copyTime, e.copyTime); } else agg.set(k, { ...e, path: null, n: 1, mass: true });
+      }
+      this.detected.unshift(...agg.values());
+    } else {
+      this.detected.unshift(...fresh);
     }
+
+    // Решённые копии забываем, только если все папки просканировались без ошибок
+    if (allOk) for (const key of [...this.seen]) if (!current.has(key)) this.seen.delete(key);
     if (this.detected.length > MAX_DETECTED) this.detected.length = MAX_DETECTED;
-    return added;
+    return fresh.length;
   }
 
   clear() {
@@ -119,13 +138,13 @@ class Stats {
       idx.set(k, series.length);
       series.push({ key: k, date: new Date(t), detected: 0, resolved: 0 });
     }
-    for (const e of D) { const i = idx.get(dayKey(e.t)); if (i !== undefined) series[i].detected++; }
-    for (const e of J) { const i = idx.get(dayKey(e.t)); if (i !== undefined) series[i].resolved++; }
+    for (const e of D) { const i = idx.get(dayKey(e.t)); if (i !== undefined) series[i].detected += e.n || 1; }
+    for (const e of J) { const i = idx.get(dayKey(e.t)); if (i !== undefined) series[i].resolved += e.n || 1; }
 
     const devName = (id) => core.deviceName(id);
     return {
-      detected: D.length,
-      resolved: J.length,
+      detected: D.reduce((n, e) => n + (e.n || 1), 0),
+      resolved: J.reduce((n, e) => n + (e.n || 1), 0),
       open: core.conflictCount(),
       medianMs: median(durations),
       avgMs: durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null,
@@ -135,7 +154,7 @@ class Stats {
       series,
       byDevice: countBy(D, (e) => devName(e.device)),
       byFolder: countBy(D, (e) => (e.source && e.source !== 'Хранилище' ? `${e.source} › ${e.folder}` : e.folder)),
-      topFiles: countBy(D, (e) => e.path).slice(0, 10),
+      topFiles: countBy(D.filter((e) => e.path), (e) => e.path).slice(0, 10),
       byKind: countBy(D, (e) => e.kind),
       byAction: countBy(J, (e) => e.action),
       byWeekday: countBy(D, (e) => (new Date(e.t).getDay() + 6) % 7),

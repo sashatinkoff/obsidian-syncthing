@@ -18,7 +18,12 @@ class Journal {
     this.entries.unshift(entry);
     const limit = this.plugin.settings.journalLimit || 500;
     if (this.entries.length > limit) this.entries.length = limit;
-    this.plugin.saveData_();
+    // Сохраняем не чаще раза в секунду: при массовых действиях data.json не перезаписывается тысячи раз
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.plugin.saveData_();
+    }, 1000);
   }
 
   clear() {
@@ -34,7 +39,7 @@ class Journal {
     let autoBlocks = 0;
     let manualBlocks = 0;
     for (const e of this.entries) {
-      if (e.t >= weekAgo) week++;
+      if (e.t >= weekAgo) week += e.n || 1;
       autoBlocks += e.auto || 0;
       manualBlocks += e.manual || 0;
       const dn = e.deviceName || e.device || '—';

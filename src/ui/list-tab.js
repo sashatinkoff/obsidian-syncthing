@@ -4,16 +4,13 @@
  */
 
 const { Menu, Notice } = require('obsidian');
-const { formatDate, formatSize, relativeAge, plural } = require('../util');
-const { button, icon, chip, statCard, emptyState, avatar, confirm } = require('./dom');
+const { formatDate, formatSize, relativeAge, plural, basename } = require('../util');
+const { button, icon, chip, statCard, emptyState, avatar } = require('./dom');
+const { CATEGORIES, CATEGORY_ORDER } = require('../io/bulk');
+const { renderBulkPanel, SAFE } = require('./bulk-panel');
 
-const FILTERS = [
-  ['all', 'Все'],
-  ['text', 'Текст'],
-  ['media', 'Медиа и файлы'],
-  ['identical', 'Идентичные'],
-  ['base', 'Есть база'],
-];
+const PAGE = 50;
+const CHIP_TONE = { ok: 'ok', info: 'manual', warn: 'conflict', conflict: 'conflict' };
 
 const KIND_ICON = { text: 'file-text', image: 'image', binary: 'file' };
 
@@ -23,13 +20,8 @@ function matches(group, state) {
   if (state.source && group.source.id !== state.source) return false;
   const q = state.query.trim().toLowerCase();
   if (q && !group.path.toLowerCase().includes(q)) return false;
-  switch (state.filter) {
-    case 'text': return group.kind === 'text';
-    case 'media': return group.kind !== 'text';
-    case 'identical': return group.copies.some((c) => c.identical);
-    case 'base': return group.versions.length > 0;
-    default: return true;
-  }
+  if (state.filter && state.filter !== 'all') return group.copies.some((c) => c.category === state.filter);
+  return true;
 }
 
 function renderListTab(view, el) {
@@ -44,18 +36,22 @@ function renderListTab(view, el) {
 
   const groups = scan.groups;
   const copies = groups.reduce((n, g) => n + g.copies.length, 0);
-  const identical = groups.reduce((n, g) => n + g.copies.filter((c) => c.identical).length, 0);
   const devices = new Set(groups.flatMap((g) => g.copies.map((c) => c.device)));
+  const counts = (scan.analysis && scan.analysis.counts) || {};
+  const analyzed = scan.analysis && scan.analysis.done;
+  const safe = SAFE.reduce((n, [c]) => n + (counts[c] || 0), 0);
+  const fmt = (n) => n.toLocaleString('ru-RU');
 
   const page = el.createDiv('scr-list');
 
   const stats = page.createDiv('scr-stats');
-  statCard(stats, { label: 'Конфликтных копий', value: copies, ico: 'git-merge', variant: copies ? 'warn' : 'ok', hint: copies ? 'ждут решения' : 'всё чисто' });
-  statCard(stats, { label: 'Файлов', value: groups.length, ico: 'files' });
-  statCard(stats, { label: 'Идентичных', value: identical, ico: 'copy-check', hint: identical ? 'можно убрать сразу' : null });
+  statCard(stats, { label: 'Конфликтных копий', value: fmt(copies), ico: 'git-merge', variant: copies ? 'warn' : 'ok', hint: copies ? `в ${fmt(groups.length)} ${plural(groups.length, 'файле', 'файлах', 'файлах')}` : 'всё чисто' });
+  statCard(stats, { label: 'Разберутся сами', value: analyzed ? fmt(safe) : '…', ico: 'check-check', variant: safe ? 'ok' : null, hint: analyzed ? 'без потери данных' : 'анализирую' });
+  statCard(stats, { label: 'Нужна сверка', value: analyzed ? fmt(counts.conflict || 0) : '…', ico: 'git-compare', variant: counts.conflict ? 'warn' : null, hint: analyzed ? 'встречные правки' : null });
   statCard(stats, { label: 'Устройств', value: devices.size, ico: 'smartphone' });
 
   renderSources(view, page, scan);
+  if (groups.length) renderBulkPanel(view, page, scan);
 
   if (!groups.length) {
     emptyState(page, {
@@ -81,15 +77,11 @@ function renderListTab(view, el) {
     });
   });
   const seg = tb.createDiv('scr-seg');
-  for (const [key, label] of FILTERS) {
+  const filters = [['all', `Все ${fmt(copies)}`]].concat(CATEGORY_ORDER.filter((c) => counts[c]).map((c) => [c, `${CATEGORIES[c].label} ${fmt(counts[c])}`]));
+  if (state.filter !== 'all' && !counts[state.filter]) state.filter = 'all';
+  for (const [key, label] of filters) {
     const b = seg.createEl('button', { text: label, cls: state.filter === key ? 'is-active' : '' });
-    b.addEventListener('click', () => { state.filter = key; view.rerender(); });
-  }
-  if (identical) {
-    button(tb, {
-      text: `Убрать идентичные (${identical})`, icon: 'sparkles', variant: 'soft',
-      onClick: () => view.cleanIdentical(),
-    });
+    b.addEventListener('click', () => { state.filter = key; state.limit = PAGE; view.rerender(false); });
   }
 
   // Панель выделения
@@ -110,7 +102,8 @@ function renderListTab(view, el) {
     list.createDiv({ cls: 'scr-muted scr-pad', text: 'Под фильтр ничего не попало.' });
   }
 
-  for (const g of visible) {
+  const limit = state.limit || PAGE;
+  for (const g of visible.slice(0, limit)) {
     const card = list.createDiv('scr-group');
     const head = card.createDiv('scr-group-head');
 
@@ -133,6 +126,10 @@ function renderListTab(view, el) {
     const badges = head.createDiv('scr-badges');
     if (g.source.kind !== 'vault') chip(badges, g.source.label, 'muted', 'folder-open');
     if (!g.exists) chip(badges, 'исходный удалён', 'conflict', 'file-x');
+    if (g.renamedFrom) {
+      const rc = chip(badges, `было: ${basename(g.renamedFrom)}`, 'manual', 'file-input');
+      rc.setAttr('title', `Исходный файл переименован: ${g.renamedFrom} → ${g.path}. Копии сравниваются с новым файлом.`);
+    }
     if (g.versions.length) chip(badges, `база: ${g.versions.length}`, 'auto', 'history');
     if (g.copies.length > 1) chip(badges, `${g.copies.length} ${plural(g.copies.length, 'копия', 'копии', 'копий')}`, 'muted');
 
@@ -160,11 +157,14 @@ function renderListTab(view, el) {
         if (d) line2.createSpan({ cls: d > 0 ? 'scr-plus' : 'scr-minus', text: ` ${d > 0 ? '+' : '−'}${formatSize(Math.abs(d))}` });
       }
       const tags = r.createDiv('scr-badges');
-      if (c.identical === true) chip(tags, 'идентична', 'ok', 'check');
-      else if (c.identical === null) chip(tags, '…', 'muted');
+      if (c.category) {
+        const meta = CATEGORIES[c.category];
+        const ch = chip(tags, meta.label.toLowerCase(), CHIP_TONE[meta.tone], meta.ico);
+        if (c.detail) ch.setAttr('title', c.detail);
+      } else chip(tags, '…', 'muted');
 
       const act = r.createDiv('scr-copy-actions');
-      if (c.identical) {
+      if (c.category === 'identical' || c.category === 'whitespace') {
         button(act, { text: 'Убрать', icon: 'trash-2', variant: 'soft', onClick: () => view.runFor(g, c, 'identical') });
       } else {
         button(act, { text: g.exists ? 'Сверить' : 'Разобрать', icon: 'git-compare', variant: 'primary', onClick: () => view.openMerge(g, c) });
@@ -186,6 +186,12 @@ function renderListTab(view, el) {
         },
       });
     }
+  }
+
+  if (visible.length > limit) {
+    const more = page.createDiv('scr-more');
+    more.createSpan({ cls: 'scr-muted', text: `Показано ${fmt(limit)} из ${fmt(visible.length)} ${plural(visible.length, 'файла', 'файлов', 'файлов')}` });
+    button(more, { text: `Показать ещё ${Math.min(PAGE * 4, visible.length - limit)}`, icon: 'chevron-down', variant: 'soft', onClick: () => { state.limit = limit + PAGE * 4; view.rerender(true); } });
   }
 }
 
@@ -210,9 +216,9 @@ function renderSources(view, page, scan) {
     body.createDiv({ cls: 'scr-source-name', text: s.label });
     const meta = body.createDiv('scr-source-meta');
     if (!s.ok) meta.setText(s.error);
-    else meta.setText(`${s.files} ${plural(s.files, 'файл', 'файла', 'файлов')} · ${s.ms < 1000 ? `${s.ms} мс` : `${(s.ms / 1000).toFixed(1)} с`}`);
+    else meta.setText(`${s.files.toLocaleString('ru-RU')} ${plural(s.files, 'файл', 'файла', 'файлов')} · ${s.ms < 1000 ? `${s.ms} мс` : `${(s.ms / 1000).toFixed(1)} с`}`);
     if (s.ok) {
-      card.createDiv({ cls: ['scr-source-count'].concat(s.conflicts ? ['is-warn'] : []), text: String(s.conflicts) });
+      card.createDiv({ cls: ['scr-source-count'].concat(s.conflicts ? ['is-warn'] : []), text: s.conflicts.toLocaleString('ru-RU') });
       card.addEventListener('click', () => {
         state.source = state.source === s.id ? null : s.id;
         view.rerender();

@@ -81,6 +81,7 @@ function renderHead(view, wrap, s) {
   title.createDiv({ text: group.name, cls: 'scr-merge-name' });
   const sub = title.createDiv('scr-merge-path');
   sub.setText(group.path);
+  if (group.renamedFrom) chip(sub, `переименован из ${group.renamedFrom.split('/').pop()}`, 'manual', 'file-input');
   if (group.source.kind !== 'vault') chip(sub, group.source.label, 'muted', 'folder-open');
   if (group.copies.length > 1) {
     const idx = group.copies.indexOf(copy) + 1;

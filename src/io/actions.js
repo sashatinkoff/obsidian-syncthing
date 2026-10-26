@@ -51,7 +51,7 @@ class ConflictActions {
   }
 
   /** Взять конфликтную копию целиком. */
-  async takeCopy(group, copy) {
+  async takeCopy(group, copy, opts = {}) {
     const src = group.source;
     if (!group.exists) {
       await src.rename(copy.path, group.path);
@@ -64,16 +64,16 @@ class ConflictActions {
       await src.writeBinary(group.path, data);
       await src.remove(copy.path, this.mode);
     }
-    this.log(group, copy, 'take');
+    if (opts.log !== false) this.log(group, copy, 'take');
   }
 
   /** Оставить обе: копия переименовывается в «имя (устройство дата).ext». */
-  async keepBoth(group, copy) {
+  async keepBoth(group, copy, opts = {}) {
     const { dir, stem, ext } = splitExt(group.path);
     const name = `${stem} (${this.plugin.deviceName(copy.device)} ${fileStamp(copy.time)})${ext}`;
     const target = await uniquePath(group.source, joinPath(dir, name));
     await group.source.rename(copy.path, target);
-    this.log(group, copy, 'both', { target });
+    if (opts.log !== false) this.log(group, copy, 'both', { target });
     return target;
   }
 

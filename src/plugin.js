@@ -7,8 +7,9 @@
 const { Notice, Platform, TFile, TFolder, Menu, debounce, normalizePath } = require('obsidian');
 const { VIEW_TYPE, ICON, DEFAULT_SETTINGS } = require('./constants');
 const { VaultSource, createFolderSource } = require('./io/sources');
-const { scanAll, scanSource, checkIdentical, isConflictPath, parseConflict } = require('./io/scanner');
+const { scanAll, scanSource, isConflictPath, parseConflict } = require('./io/scanner');
 const { ConflictActions } = require('./io/actions');
+const { Bulk } = require('./io/bulk');
 const { Journal, ACTION_LABELS } = require('./journal');
 const { Stats, formatDuration } = require('./stats');
 const { ConflictView } = require('./ui/view');
@@ -37,6 +38,7 @@ class Core {
     this.journal = new Journal(this, data.journal);
     this.stats = new Stats(this, data.stats);
     this.actions = new ConflictActions(this);
+    this.bulk = new Bulk(this);
     this.vaultSource = new VaultSource(this);
 
     const host = this.host;
@@ -81,7 +83,7 @@ class Core {
 
     this.queueScan = debounce(() => this.rescan({ notify: true }), 1500, true);
     const onChange = (file, oldPath) => {
-      if (!this.settings.autoScan) return;
+      if (!this.settings.autoScan || this.bulk.running) return;
       if (isConflictPath(file.path) || (oldPath && isConflictPath(oldPath))) this.queueScan();
     };
     host.registerEvent(this.app.vault.on('create', (f) => onChange(f)));
@@ -267,6 +269,13 @@ class Core {
     }
   }
 
+  /** Лёгкое уведомление о ходе анализа или массового действия — без полной перерисовки. */
+  emitProgress() {
+    for (const fn of this.listeners) {
+      try { fn('progress'); } catch (e) { console.error('[Syncthing Conflict Resolver]', e); }
+    }
+  }
+
   conflictCount() {
     return this.scan ? this.scan.groups.reduce((n, g) => n + g.copies.length, 0) : 0;
   }
@@ -274,14 +283,14 @@ class Core {
   updateStatus() {
     const n = this.conflictCount();
     if (this.ribbonEl) {
-      this.ribbonEl.dataset.count = String(n);
+      this.ribbonEl.dataset.count = n > 999 ? `${Math.floor(n / 1000)}k` : String(n);
       this.ribbonEl.setAttr('aria-label', n ? `Конфликты Syncthing: ${n}` : 'Конфликты Syncthing');
     }
     if (!this.statusEl) return;
     this.statusEl.empty();
     this.statusEl.toggleClass('is-hidden', n === 0);
     if (n) {
-      this.statusEl.setText(`⇄ ${n} ${plural(n, 'конфликт', 'конфликта', 'конфликтов')}`);
+      this.statusEl.setText(`⇄ ${n.toLocaleString('ru-RU')} ${plural(n, 'конфликт', 'конфликта', 'конфликтов')}`);
       this.statusEl.setAttr('aria-label', 'Открыть конфликты Syncthing');
     }
   }
@@ -297,13 +306,8 @@ class Core {
       this.scanning = false;
       this.emit();
 
-      for (const g of result.groups) {
-        for (const c of g.copies) {
-          if (this.scan !== result) return;
-          await checkIdentical(g, c);
-        }
-      }
-      if (this.scan === result) this.emit();
+      // Классификация всех копий: идентичные, невидимые отличия, только свойства, автослияние…
+      await this.bulk.analyze(result);
 
       const keys = new Set(result.groups.flatMap((g) => g.copies.map((c) => `${g.source.id}::${c.path}`)));
       if (opts.notify && this.settings.notifyNew && this.knownCopies) {
@@ -350,29 +354,23 @@ class Core {
   }
 
   async cleanIdentical(ask) {
-    if (!this.scan) await this.rescan();
+    if (!this.scan || !this.scan.analysis || !this.scan.analysis.done) await this.rescan();
     if (!this.scan) return 0;
-    const pairs = [];
-    for (const g of this.scan.groups) for (const c of g.copies) {
-      if (c.identical === null) await checkIdentical(g, c);
-      if (c.identical) pairs.push([g, c]);
-    }
-    if (!pairs.length) { new Notice('Идентичных копий нет'); return 0; }
+    const n = this.bulk.items('identical').length + this.bulk.items('whitespace').length;
+    if (!n) { new Notice('Идентичных копий нет'); return 0; }
     if (ask) {
       const ok = await confirm(this.app, {
         title: 'Убрать идентичные копии?',
-        text: `${pairs.length} ${plural(pairs.length, 'копия совпадает', 'копии совпадают', 'копий совпадают')} с текущими файлами байт в байт.`,
+        text: `${n} ${plural(n, 'копия совпадает', 'копии совпадают', 'копий совпадают')} с текущими файлами (байт в байт или с точностью до невидимых символов). Текущие файлы не меняются.`,
         confirm: 'Убрать',
       });
       if (!ok) return null;
     }
-    let n = 0;
-    for (const [g, c] of pairs) {
-      try { await this.actions.removeIdentical(g, c); n++; } catch (e) { new Notice(`${g.name}: ${e.message}`); }
-    }
-    new Notice(`Убрано идентичных копий: ${n}`);
+    const a = await this.bulk.run('identical', 'remove');
+    const b = await this.bulk.run('whitespace', 'remove');
+    new Notice(`Убрано копий: ${a.ok + b.ok}${a.failed + b.failed ? `, ошибок: ${a.failed + b.failed}` : ''}`);
     await this.rescan();
-    return n;
+    return a.ok + b.ok;
   }
 
   /* ---------- окно ---------- */

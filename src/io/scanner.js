@@ -45,6 +45,41 @@ async function buildVersionIndex(location) {
   return index;
 }
 
+/* ---------- переименованные файлы ---------- */
+
+/** Имя без расширения, приведённое к «скелету»: регистр, Юникод, разделители (пробел, _, -, .) не важны. */
+function nameKey(path) {
+  const b = basename(path);
+  const i = b.lastIndexOf('.');
+  const stem = (i > 0 ? b.slice(0, i) : b).normalize('NFC').toLowerCase();
+  const ext = i > 0 ? b.slice(i).toLowerCase() : '';
+  return stem.replace(/[\s_\-.,()]+/g, '') + ext;
+}
+
+/**
+ * Исходного файла нет — возможно, его переименовали (Syncthing видит переименование как удаление + создание,
+ * а правка старого имени на другом устройстве превращается в конфликтную копию).
+ * Ищем файл с тем же «скелетом» имени: сначала в той же папке, потом где угодно.
+ */
+function findRenamed(original, index) {
+  const list = index.get(nameKey(original));
+  if (!list || !list.length) return null;
+  const dir = dirname(original);
+  return list.find((p) => dirname(p) === dir) || (list.length === 1 ? list[0] : null);
+}
+
+/** Привязать группу к найденному новому имени: дальше всё сравнивается с ним. */
+async function attachRenamed(group, target, how) {
+  const st = await group.source.stat(target);
+  group.renamedFrom = group.path;
+  group.renamedHow = how;
+  group.path = target;
+  group.name = basename(target);
+  group.exists = true;
+  group.size = st ? st.size : null;
+  group.mtime = st ? st.mtime : null;
+}
+
 /**
  * Сканирование одного источника.
  * @returns {Promise<{groups: Array, status: {id,label,kind,root,ok,error,files,conflicts,ms}}>}
@@ -86,6 +121,16 @@ async function scanSource(plugin, source) {
   }
 
   if (byOriginal.size) {
+    // Индекс «скелетов» имён существующих файлов — для поиска переименованных
+    const nameIndex = new Map();
+    for (const p of paths) {
+      if (CONFLICT_RE.test(basename(p))) continue;
+      if (source.kind === 'vault' && isExcluded(p, settings.excludedFolders)) continue;
+      const k = nameKey(p);
+      if (!nameIndex.has(k)) nameIndex.set(k, []);
+      nameIndex.get(k).push(p);
+    }
+
     let versions = new Map();
     try {
       const loc = source.kind === 'vault' ? source.versionsLocation() : source.versionsLocation(source.versionsPath);
@@ -105,7 +150,7 @@ async function scanSource(plugin, source) {
         c.identical = null;
       }
       status.conflicts += copies.length;
-      groups.push({
+      const group = {
         id: `${source.id}::${original}`,
         source,
         path: original,
@@ -116,7 +161,13 @@ async function scanSource(plugin, source) {
         kind: fileKind(original),
         copies,
         versions: versions.get(source.syncKey(original)) || [],
-      });
+        renamedFrom: null,
+      };
+      if (!exists) {
+        const target = findRenamed(original, nameIndex);
+        if (target) await attachRenamed(group, target, 'name');
+      }
+      groups.push(group);
     }
   }
   status.ms = Date.now() - started;
@@ -172,4 +223,4 @@ function pickBase(group, copy) {
   return group.versions.find((v) => v.time.getTime() <= limit) || null;
 }
 
-module.exports = { scanAll, scanSource, checkIdentical, pickBase, parseConflict, isConflictPath };
+module.exports = { scanAll, scanSource, checkIdentical, pickBase, parseConflict, isConflictPath, nameKey, findRenamed, attachRenamed };

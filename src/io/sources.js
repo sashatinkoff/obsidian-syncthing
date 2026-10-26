@@ -57,9 +57,14 @@ class VaultSource {
     return f instanceof TFile ? f : null;
   }
 
-  async exists(path) { return this.adapter.exists(path); }
+  async exists(path) {
+    if (this.app.vault.getAbstractFileByPath(path)) return true;
+    return this.adapter.exists(path);
+  }
 
   async stat(path) {
+    const f = this.file(path);
+    if (f && f.stat) return { mtime: f.stat.mtime, size: f.stat.size };
     try {
       const s = await this.adapter.stat(path);
       return s ? { mtime: s.mtime, size: s.size } : null;
