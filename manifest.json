@@ -1,0 +1,9 @@
+{
+  "id": "syncthing-conflict-resolver",
+  "name": "Syncthing Conflict Resolver",
+  "version": "1.1.0",
+  "minAppVersion": "1.4.10",
+  "description": "Сверка и слияние конфликтов Syncthing (*.sync-conflict-*) бок о бок, как в pull request: трёхстороннее слияние с базой из .stversions, слияние свойств по ключам, статистика, папки на устройстве.",
+  "author": "Sasha Tinkoff",
+  "isDesktopOnly": false
+}
