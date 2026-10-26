@@ -27,23 +27,23 @@
 
 ## Установка
 
-Скопируйте папку `syncthing-conflict-resolver` целиком в `<хранилище>/.obsidian/plugins/`:
+Для работы нужны только три файла: `main.js`, `manifest.json` и `styles.css`. Положите их в `<хранилище>/.obsidian/plugins/syncthing-conflict-resolver/`. Можно скопировать и всю папку целиком, тогда README в настройках будет со скриншотами.
 
 ```
 .obsidian/plugins/syncthing-conflict-resolver/
-  main.js
+  main.js          ← все модули уже внутри
   manifest.json
   styles.css
-  README.md
-  screenshots/
-  src/
+  README.md        (необязательно)
+  screenshots/     (необязательно)
+  src/             (необязательно — исходники для правок)
 ```
 
-Затем откройте **Настройки → Сторонние плагины**, нажмите ⟳ («Перезагрузить плагины») и включите **Syncthing Conflict Resolver**. Собирать ничего не нужно.
+Затем откройте **Настройки → Сторонние плагины**, нажмите ⟳ («Перезагрузить плагины») и включите **Syncthing Conflict Resolver**.
 
 > Папка `.obsidian` скрытая. На macOS её показывает `Cmd + Shift + .`
 
-**Установщик, который копирует только три файла.** Если ваш установщик переносит только `main.js`, `manifest.json` и `styles.css`, укажите ему папку `dist/`: там все модули собраны в один `main.js`. Пересобрать её можно командой `node tools/build-single.js`.
+Ваш установщик, который переносит только эти три файла, подходит: `main.js` самодостаточный.
 
 **На телефон** плагин попадёт сам: `.obsidian/plugins` синхронизируется через Syncthing вместе с хранилищем. Останется включить его в настройках Obsidian на телефоне.
 
@@ -198,7 +198,7 @@
 ## Устройство кода
 
 ```
-main.js                  загрузчик: читает src/ через адаптер хранилища (работает и на телефоне)
+main.js                  собранный плагин: все модули src/ внутри (генерируется, не править руками)
 src/plugin.js            ядро: настройки, сканирование, лента, команды, события
 src/constants.js         регулярки имён, настройки по умолчанию
 src/util.js              даты, пути, размеры
@@ -218,8 +218,10 @@ src/ui/merge-session.js  состояние одной сверки
 src/ui/stats-tab.js      вкладка «Статистика»
 src/ui/journal-tab.js    вкладка «Журнал»
 src/ui/dom.js            кнопки, карточки, подтверждения
-tools/build-single.js    сборка в один dist/main.js
+tools/build-single.js    сборка main.js из src/: node tools/build-single.js
 screenshots/             картинки для этого README
 ```
+
+Правки делаются в `src/`, после них нужно пересобрать `main.js` командой `node tools/build-single.js`. Нужен только Node.js, зависимостей нет.
 
 Скриншоты сняты на демонстрационных данных.

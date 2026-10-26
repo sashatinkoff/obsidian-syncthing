@@ -119,6 +119,10 @@ class Core {
         });
       }
     } catch (e) { /* нет файла */ }
+    // README не скопирован (установщик переносит только main.js, manifest.json, styles.css) —
+    // берём текст, встроенный в main.js при сборке, без картинок
+    const embedded = typeof globalThis.__SCR_README === 'string' ? globalThis.__SCR_README : null;
+    if (embedded) return embedded.replace(/^!\[[^\]]*\]\(screenshots\/[^)]+\)\s*$/gm, '');
     return null;
   }
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Необязательная сборка в один файл: dist/main.js со всеми модулями src/ внутри.
- * Нужна, если плагин ставится установщиком, который копирует только
- * main.js + manifest.json + styles.css (папку src он не переносит).
+ * Собирает main.js из модулей src/ — все модули оказываются внутри одного файла.
+ * Так плагин работает, даже если установщик копирует только
+ * main.js + manifest.json + styles.css.
  *
- *   node tools/build-single.js
+ * Запускать после правок в src/:   node tools/build-single.js
  */
 
 const fs = require('fs');
@@ -13,7 +13,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const srcDir = path.join(root, 'src');
-const distDir = path.join(root, 'dist');
+const outFile = path.join(root, 'main.js');
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -31,8 +31,14 @@ const modules = walk(srcDir).sort().map((full) => {
 });
 
 const out = `'use strict';
-/* Syncthing Conflict Resolver — однофайловая сборка (сгенерировано tools/build-single.js). */
+/*
+ * Syncthing Conflict Resolver
+ * Файл собран из src/ командой «node tools/build-single.js» — правьте модули в src/, а не этот файл.
+ * Все модули внутри, поэтому достаточно скопировать main.js, manifest.json и styles.css.
+ */
 const obsidian = require('obsidian');
+
+const README = ${JSON.stringify(fs.existsSync(path.join(root, 'README.md')) ? fs.readFileSync(path.join(root, 'README.md'), 'utf8') : '')};
 
 const MODULES = {
 ${modules.join('\n')}
@@ -64,6 +70,7 @@ function load(from, spec) {
 module.exports = class SyncthingConflictResolver extends obsidian.Plugin {
   async onload() {
     try {
+      globalThis.__SCR_README = README;
       const { Core } = load('main.js', './src/plugin.js');
       this.core = new Core(this);
       await this.core.onload();
@@ -76,14 +83,5 @@ module.exports = class SyncthingConflictResolver extends obsidian.Plugin {
 };
 `;
 
-fs.mkdirSync(distDir, { recursive: true });
-fs.writeFileSync(path.join(distDir, 'main.js'), out);
-for (const f of ['manifest.json', 'styles.css', 'README.md']) {
-  if (fs.existsSync(path.join(root, f))) fs.copyFileSync(path.join(root, f), path.join(distDir, f));
-}
-const shots = path.join(root, 'screenshots');
-if (fs.existsSync(shots)) {
-  fs.mkdirSync(path.join(distDir, 'screenshots'), { recursive: true });
-  for (const f of fs.readdirSync(shots)) fs.copyFileSync(path.join(shots, f), path.join(distDir, 'screenshots', f));
-}
-console.log(`dist/main.js: ${modules.length} модулей, ${(out.length / 1024).toFixed(1)} КБ`);
+fs.writeFileSync(outFile, out);
+console.log(`main.js: ${modules.length} модулей, ${(out.length / 1024).toFixed(1)} КБ`);
