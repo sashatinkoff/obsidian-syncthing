@@ -51,6 +51,7 @@ function renderListTab(view, el) {
   statCard(stats, { label: 'Устройств', value: devices.size, ico: 'smartphone' });
 
   renderSources(view, page, scan);
+  renderHidden(view, page, scan);
   if (groups.length) renderBulkPanel(view, page, scan);
 
   if (!groups.length) {
@@ -226,6 +227,24 @@ function renderSources(view, page, scan) {
       card.setAttr('title', state.source === s.id ? 'Показать все папки' : 'Показать конфликты только этой папки');
     }
   }
+}
+
+/** Предупреждение о копиях в исключённых папках: плагин их не показывает, а Syncthing — да. */
+function renderHidden(view, page, scan) {
+  const hidden = scan.hidden || [];
+  if (!hidden.length) return;
+  const n = hidden.length;
+  const folders = [...new Set(hidden.map((h) => h.path.split('/')[0]))].join(', ');
+  const b = page.createDiv('scr-banner scr-banner-warn scr-hidden');
+  icon(b, 'eye-off');
+  const body = b.createDiv('scr-hidden-body');
+  body.createDiv({
+    text: `В исключённых папках (${folders}) ${plural(n, 'лежит', 'лежат', 'лежат')} ${n.toLocaleString('ru-RU')} ${plural(n, 'файл', 'файла', 'файлов')} с именем *.sync-conflict-*. `
+      + 'Здесь они не разбираются, но Syncthing считает их конфликтами. Обычно это уже разобранные копии, убранные в корзину.',
+  });
+  const row = body.createDiv('scr-hidden-actions');
+  button(row, { text: 'Обезвредить', icon: 'file-check', variant: 'soft', title: 'Переименовать в *.resolved-conflict-*, содержимое сохранится', onClick: () => view.core.cleanHidden('neutralize', true) });
+  button(row, { text: 'Удалить насовсем', icon: 'trash-2', variant: 'ghost', onClick: () => view.core.cleanHidden('delete', true) });
 }
 
 module.exports = { renderListTab, copyKey };

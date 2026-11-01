@@ -89,6 +89,7 @@ async function scanSource(plugin, source) {
   const started = Date.now();
   const status = { id: source.id, label: source.label, kind: source.kind, root: source.root || '', ok: true, error: null, files: 0, conflicts: 0, ms: 0 };
   const groups = [];
+  const hidden = []; // конфликтные имена в исключённых папках: плагин их не разбирает, но Syncthing видит
 
   if (source.check) {
     const c = await source.check();
@@ -96,7 +97,7 @@ async function scanSource(plugin, source) {
       status.ok = false;
       status.error = c.error;
       status.ms = Date.now() - started;
-      return { groups, status };
+      return { groups, status, hidden };
     }
   }
 
@@ -107,13 +108,16 @@ async function scanSource(plugin, source) {
     status.ok = false;
     status.error = e.message;
     status.ms = Date.now() - started;
-    return { groups, status };
+    return { groups, status, hidden };
   }
   status.files = paths.length;
 
   const byOriginal = new Map();
   for (const p of paths) {
-    if (source.kind === 'vault' && isExcluded(p, settings.excludedFolders)) continue;
+    if (source.kind === 'vault' && isExcluded(p, settings.excludedFolders)) {
+      if (isConflictPath(p)) hidden.push({ source, path: p });
+      continue;
+    }
     const c = parseConflict(p);
     if (!c) continue;
     if (!byOriginal.has(c.original)) byOriginal.set(c.original, []);
@@ -171,7 +175,7 @@ async function scanSource(plugin, source) {
     }
   }
   status.ms = Date.now() - started;
-  return { groups, status };
+  return { groups, status, hidden };
 }
 
 /**
@@ -182,14 +186,16 @@ async function scanAll(plugin) {
   const groups = [];
   const sources = [];
   const errors = [];
+  const hidden = [];
   for (const source of plugin.getSources()) {
     const r = await scanSource(plugin, source);
     groups.push(...r.groups);
+    hidden.push(...(r.hidden || []));
     sources.push(r.status);
     if (!r.status.ok) errors.push(`${source.label}: ${r.status.error}`);
   }
   groups.sort((a, b) => (b.copies[0].time - a.copies[0].time));
-  return { groups, sources, scannedAt: Date.now(), errors };
+  return { groups, sources, hidden, scannedAt: Date.now(), errors };
 }
 
 /** Проверка «копия идентична текущему файлу». */

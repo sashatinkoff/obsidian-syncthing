@@ -149,6 +149,7 @@ class SettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Куда девать конфликтную копию')
+      .setDesc('В корзину Obsidian копия уходит под именем *.resolved-conflict-*, чтобы Syncthing не считал её конфликтом. Саму .trash стоит исключить из синхронизации.')
       .addDropdown((d) => d
         .addOption('local', 'Корзина Obsidian (.trash)')
         .addOption('system', 'Системная корзина')

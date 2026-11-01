@@ -760,3 +760,7 @@
 .scr-narrow .scr-bulk-head .scr-btn-primary,
 .is-mobile .scr-bulk-head .scr-btn-primary { width: 100%; }
 .scr-bulk-note { margin: 12px 0 0; }
+
+/* Копии в исключённых папках */
+.scr-hidden-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.scr-hidden-actions { display: flex; flex-wrap: wrap; gap: 6px; }

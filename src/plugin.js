@@ -60,6 +60,7 @@ class Core {
     host.addCommand({ id: 'open-stats', name: 'Статистика конфликтов', callback: () => this.openView(null, 'stats') });
     host.addCommand({ id: 'check-folders', name: 'Проверить папки на устройстве', callback: () => this.checkAllFolders() });
     host.addCommand({ id: 'stats-note', name: 'Сохранить отчёт статистики в заметку', callback: () => this.writeStatsNote() });
+    host.addCommand({ id: 'clean-hidden', name: 'Обезвредить старые копии в исключённых папках (.trash)', callback: () => this.cleanHidden('neutralize', true) });
     host.addCommand({ id: 'clean-identical', name: 'Убрать идентичные конфликтные копии', callback: () => this.cleanIdentical(true) });
     host.addCommand({
       id: 'resolve-active',
@@ -371,6 +372,42 @@ class Core {
     new Notice(`Убрано копий: ${a.ok + b.ok}${a.failed + b.failed ? `, ошибок: ${a.failed + b.failed}` : ''}`);
     await this.rescan();
     return a.ok + b.ok;
+  }
+
+  /**
+   * Копии с именем *.sync-conflict-* в исключённых папках (обычно .trash — туда их клали
+   * прошлые версии плагина). Разбирать их не нужно, но Syncthing считает их конфликтами.
+   * @param {'neutralize'|'delete'} mode — переименовать в *.resolved-conflict-* или удалить насовсем
+   */
+  async cleanHidden(mode, ask) {
+    if (!this.scan) await this.rescan();
+    const items = (this.scan && this.scan.hidden) || [];
+    if (!items.length) { new Notice('Старых конфликтных копий в исключённых папках нет'); return 0; }
+    if (ask) {
+      const n = items.length;
+      const ok = await confirm(this.app, {
+        title: mode === 'delete' ? 'Удалить старые копии насовсем?' : 'Обезвредить старые копии?',
+        text: mode === 'delete'
+          ? `${n} ${plural(n, 'файл', 'файла', 'файлов')} в исключённых папках будут удалены без корзины.`
+          : `${n} ${plural(n, 'файл', 'файла', 'файлов')} переименуются: «.sync-conflict-» → «.resolved-conflict-». Содержимое сохранится, Syncthing перестанет считать их конфликтами.`,
+        confirm: mode === 'delete' ? 'Удалить' : 'Переименовать',
+        danger: mode === 'delete',
+      });
+      if (!ok) return null;
+    }
+    let done = 0;
+    const errors = [];
+    for (const { source, path } of items) {
+      try {
+        if (mode === 'delete') await source.remove(path, 'delete');
+        else await source.neutralize(path);
+        done++;
+      } catch (e) { errors.push(`${path}: ${e.message}`); }
+    }
+    if (errors.length) console.warn('[Syncthing Conflict Resolver] ошибки очистки:\n' + errors.join('\n'));
+    new Notice(`Обработано: ${done}${errors.length ? `, ошибок: ${errors.length}` : ''}`);
+    await this.rescan();
+    return done;
   }
 
   /* ---------- окно ---------- */
