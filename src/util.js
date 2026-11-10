@@ -96,15 +96,6 @@ function isAbsolutePath(p) {
   return /^([a-zA-Z]:[\\/]|\/|\\\\)/.test(p || '');
 }
 
-/**
- * Имя «обезвреженной» копии: .sync-conflict- → .resolved-conflict-.
- * Такой файл больше не считается конфликтом ни Syncthing, ни плагином, ни скриптами,
- * а дата и устройство в имени сохраняются.
- */
-function resolvedName(name) {
-  return name.replace('.sync-conflict-', '.resolved-conflict-');
-}
-
 function plural(n, one, few, many) {
   const m10 = n % 10;
   const m100 = n % 100;
@@ -115,5 +106,5 @@ function plural(n, one, few, many) {
 
 module.exports = {
   formatDate, fileStamp, relativeAge, parseStamp, formatSize, basename, dirname, joinPath,
-  extOf, splitExt, fileKind, mimeOf, sameBuffers, looksBinary, isAbsolutePath, plural, pad, resolvedName,
+  extOf, splitExt, fileKind, mimeOf, sameBuffers, looksBinary, isAbsolutePath, plural, pad,
 };

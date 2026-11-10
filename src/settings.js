@@ -2,7 +2,8 @@
 
 const { PluginSettingTab, Setting, Notice, Platform, MarkdownRenderer, TFolder, AbstractInputSuggest } = require('obsidian');
 const { fetchDeviceNames } = require('./io/syncthing-api');
-const { pickFolder, deviceFoldersSupport } = require('./io/sources');
+const { deviceFoldersSupport } = require('./io/sources');
+const { pickFolder, pickFromSyncthing } = require('./ui/folder-picker');
 const { plural } = require('./util');
 
 /** Автодополнение папок хранилища (включая скрытые .stversions и .trash, если они есть). */
@@ -149,7 +150,6 @@ class SettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Куда девать конфликтную копию')
-      .setDesc('В корзину Obsidian копия уходит под именем *.resolved-conflict-*, чтобы Syncthing не считал её конфликтом. Саму .trash стоит исключить из синхронизации.')
       .addDropdown((d) => d
         .addOption('local', 'Корзина Obsidian (.trash)')
         .addOption('system', 'Системная корзина')
@@ -274,6 +274,17 @@ class SettingsTab extends PluginSettingTab {
         t.setPlaceholder('.stversions').setValue(f.versionsPath || '').onChange(async (v) => { f.versionsPath = v.trim(); await save(); });
         t.inputEl.setAttr('title', 'Папка версий Syncthing (относительно папки или абсолютный путь)');
       });
+      st.addButton((b) => b.setButtonText('Изменить…').onClick(async () => {
+        const p = await pickFolder(this.app, { title: `Новое место для «${f.label || f.path}»`, start: f.path });
+        if (!p || p === f.path) return;
+        const old = f.path;
+        f.path = p.replace(/[\\/]+$/, '') || p;
+        const r = await core.checkFolder(f);
+        if (!r.ok) { f.path = old; new Notice(`Не изменено: ${r.error}`); return; }
+        await save();
+        this.display();
+        core.rescan();
+      }));
       st.addButton((b) => b.setButtonText('Проверить').onClick(async () => {
         status.setText('Проверяю…');
         status.className = 'scr-folder-status';
@@ -305,47 +316,75 @@ class SettingsTab extends PluginSettingTab {
 
     if (!support) return;
 
-    let pathInput;
-    let checkEl;
+    // Добавление: системный выбор папки, папки из Syncthing или путь вручную
     const add = new Setting(containerEl)
       .setName('Добавить папку')
+      .setDesc(support === 'android'
+        ? 'Выберите папку в памяти телефона или возьмите из списка папок Syncthing.'
+        : 'Выберите папку в системном окне или возьмите из списка папок Syncthing.');
+    const checkEl = add.descEl.createDiv('scr-folder-status');
+    add.addButton((b) => b.setButtonText('Из Syncthing…').onClick(async () => {
+      const f = await pickFromSyncthing(this.app, s, { added: new Set(mine.map((x) => x.path.replace(/[\\/]+$/, ''))), vaultPath: this.vaultBasePath() });
+      if (f) await this.addFolder(f, checkEl);
+    }));
+    add.addButton((b) => b.setButtonText('Выбрать папку…').setCta().onClick(async () => {
+      const p = await pickFolder(this.app, { title: 'Папка Syncthing для проверки конфликтов' });
+      if (p) await this.addFolder({ path: p }, checkEl);
+    }));
+
+    const manual = containerEl.createEl('details', { cls: 'scr-manual-path' });
+    manual.createEl('summary', { text: 'Ввести путь вручную' });
+    let pathInput;
+    new Setting(manual)
       .addText((t) => {
         pathInput = t;
         t.setPlaceholder(support === 'android' ? '/storage/emulated/0/Syncthing/Документы' : '/Users/me/Sync/Документы');
         t.inputEl.addClass('scr-path-input');
-      });
-    if (support === 'desktop') {
-      add.addButton((b) => b.setButtonText('Выбрать…').onClick(async () => {
-        const p = await pickFolder();
-        if (p) pathInput.setValue(p);
+      })
+      .addButton((b) => b.setButtonText('Проверить и добавить').onClick(async () => {
+        const p = (pathInput.getValue() || '').trim();
+        if (p) await this.addFolder({ path: p }, checkEl);
       }));
+  }
+
+  vaultBasePath() {
+    const a = this.app.vault.adapter;
+    try { return a.getBasePath ? a.getBasePath() : a.basePath || null; } catch (e) { return null; }
+  }
+
+  deviceLabel() {
+    try { return (this.app.loadLocalStorage ? this.app.loadLocalStorage('scr-device-label') : window.localStorage.getItem('scr-device-label')) || ''; } catch (e) { return ''; }
+  }
+
+  /** Проверить доступ и добавить папку в список этого устройства. */
+  async addFolder({ path, label, versionsPath }, checkEl) {
+    const core = this.core;
+    const s = core.settings;
+    const p = path.replace(/[\\/]+$/, '') || path;
+    const norm = (x) => x.replace(/[\\/]+$/, '');
+    if (core.foldersHere().some((f) => norm(f.path) === p)) { new Notice('Эта папка уже в списке'); return false; }
+    const vault = this.vaultBasePath();
+    if (vault && norm(vault) === p) { new Notice('Это само хранилище — оно проверяется всегда'); return false; }
+    const folder = {
+      path: p,
+      label: label || p.split(/[\\/]/).pop(),
+      versionsPath: versionsPath || '.stversions',
+      enabled: true,
+      deviceId: core.localDeviceId(),
+      deviceLabel: this.deviceLabel(),
+    };
+    if (checkEl) { checkEl.setText('Проверяю доступ…'); checkEl.className = 'scr-folder-status'; }
+    const r = await core.checkFolder(folder);
+    if (!r.ok) {
+      if (checkEl) { checkEl.setText(`Не добавлено: ${r.error}`); checkEl.className = 'scr-folder-status is-error'; }
+      return false;
     }
-    add.addButton((b) => b.setButtonText('Проверить и добавить').setCta().onClick(async () => {
-      const p = (pathInput.getValue() || '').trim();
-      if (!p) return;
-      if (mine.some((f) => f.path === p)) { new Notice('Эта папка уже в списке'); return; }
-      const folder = {
-        path: p,
-        label: p.replace(/[\\/]+$/, '').split(/[\\/]/).pop(),
-        versionsPath: '.stversions',
-        enabled: true,
-        deviceId: me,
-        deviceLabel: (() => { try { return (this.app.loadLocalStorage ? this.app.loadLocalStorage('scr-device-label') : window.localStorage.getItem('scr-device-label')) || ''; } catch (e) { return ''; } })(),
-      };
-      checkEl.setText('Проверяю доступ…');
-      const r = await core.checkFolder(folder);
-      if (!r.ok) {
-        checkEl.setText(`Не добавлено: ${r.error}`);
-        checkEl.className = 'scr-folder-status is-error';
-        return;
-      }
-      s.externalFolders.push(folder);
-      await save();
-      new Notice(`Папка добавлена: ${r.files} ${plural(r.files, 'файл', 'файла', 'файлов')}, конфликтов: ${r.conflicts}`);
-      this.display();
-      core.rescan();
-    }));
-    checkEl = add.descEl.createDiv('scr-folder-status');
+    s.externalFolders.push(folder);
+    await core.saveSettings();
+    new Notice(`Папка «${folder.label}» добавлена: ${r.files.toLocaleString('ru-RU')} ${plural(r.files, 'файл', 'файла', 'файлов')}, конфликтов: ${r.conflicts}`);
+    this.display();
+    core.rescan();
+    return true;
   }
 }
 

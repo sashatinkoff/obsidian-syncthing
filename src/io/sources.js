@@ -6,7 +6,7 @@
  */
 
 const { TFile, Platform } = require('obsidian');
-const { joinPath, basename, dirname, splitExt, resolvedName } = require('../util');
+const { joinPath } = require('../util');
 
 const SKIP_DIRS = new Set(['.stversions', '.stfolder', '.stignore', '.git', 'node_modules', '.sync-conflict-trash']);
 
@@ -29,18 +29,10 @@ class VaultSource {
   async listAll() {
     const s = this.plugin.settings;
     const files = this.app.vault.getFiles().map((f) => f.path);
-    const cfg = this.app.vault.configDir;
-    if (s.scanConfigDir) files.push(...(await this.listRecursive(cfg)));
-    // Скрытые папки в корне (.trash, .smart-env…): Obsidian их не индексирует,
-    // а Syncthing видит. Исключённые потом отсеются сканером, но будут посчитаны.
-    try {
-      const root = await this.adapter.list('');
-      for (const d of root.folders) {
-        const name = basename(d);
-        if (!name.startsWith('.') || d === cfg || SKIP_DIRS.has(name)) continue;
-        files.push(...(await this.listRecursive(d)));
-      }
-    } catch (e) { /* корень недоступен — остаётся то, что видит Obsidian */ }
+    if (s.scanConfigDir) {
+      const cfg = this.app.vault.configDir;
+      files.push(...(await this.listRecursive(cfg)));
+    }
     return files;
   }
 
@@ -107,26 +99,6 @@ class VaultSource {
     else await this.adapter.rename(from, to);
   }
 
-  /** Свободный путь: «имя.ext», «имя 2.ext», … */
-  async freePath(path) {
-    if (!(await this.adapter.exists(path))) return path;
-    const { dir, stem, ext } = splitExt(path);
-    for (let i = 2; i < 1000; i++) {
-      const p = joinPath(dir, `${stem} ${i}${ext}`);
-      if (!(await this.adapter.exists(p))) return p;
-    }
-    return joinPath(dir, `${stem} ${Date.now()}${ext}`);
-  }
-
-  /** Переименовать копию так, чтобы она перестала быть конфликтом. Возвращает новый путь. */
-  async neutralize(path) {
-    const name = resolvedName(basename(path));
-    if (name === basename(path)) return path;
-    const target = await this.freePath(joinPath(dirname(path), name));
-    await this.rename(path, target);
-    return target;
-  }
-
   async remove(path, mode) {
     const f = this.file(path);
     if (mode === 'delete') {
@@ -139,12 +111,8 @@ class VaultSource {
       const ok = await this.adapter.trashSystem(path);
       if (ok) return;
     }
-    // Корзина Obsidian (.trash) лежит внутри синхронизируемой папки: под прежним
-    // именем копия так и осталась бы «конфликтом» для Syncthing. Сначала обезвреживаем имя.
-    const p = await this.neutralize(path);
-    const f2 = this.file(p);
-    if (f2) await this.app.vault.trash(f2, false);
-    else await this.adapter.trashLocal(p);
+    if (f) await this.app.vault.trash(f, false);
+    else await this.adapter.trashLocal(path);
   }
 
   resourceUrl(path) {
@@ -248,7 +216,7 @@ class FsSource {
     } catch (e) { /* нет доступа к корзине — уберём в локальную папку */ }
     const trashDir = this.nodePath.join(this.root, '.sync-conflict-trash');
     await this.fs.mkdir(trashDir, { recursive: true });
-    const target = this.nodePath.join(trashDir, `${Date.now()}-${resolvedName(this.nodePath.basename(full))}`);
+    const target = this.nodePath.join(trashDir, `${Date.now()}-${this.nodePath.basename(full)}`);
     await this.fs.rename(full, target);
   }
 
@@ -392,7 +360,7 @@ class MobileFsSource {
     if (mode === 'delete') { await this.fsApi.deleteFile({ path: this.uri(rel) }); return; }
     // Корзины на телефоне нет — переносим в служебную папку внутри синхронизируемой
     try { await this.fsApi.mkdir({ path: this.uri('.sync-conflict-trash'), recursive: true }); } catch (e) { /* уже есть */ }
-    const name = resolvedName(rel.split('/').pop());
+    const name = rel.split('/').pop();
     await this.fsApi.rename({ from: this.uri(rel), to: this.uri(`.sync-conflict-trash/${Date.now()}-${name}`) });
   }
 
@@ -424,40 +392,4 @@ function deviceFoldersSupport(app) {
   return null;
 }
 
-/** Выбор папки на десктопе: диалог Electron, иначе скрытый input. */
-async function pickFolder() {
-  try {
-    const electron = require('electron');
-    let remote = electron.remote;
-    if (!remote) { try { remote = require('@electron/remote'); } catch (e) { remote = null; } }
-    if (remote && remote.dialog) {
-      const r = await remote.dialog.showOpenDialog({ properties: ['openDirectory'] });
-      if (r.canceled || !r.filePaths || !r.filePaths[0]) return null;
-      return r.filePaths[0];
-    }
-  } catch (e) { /* переходим к запасному варианту */ }
-
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.webkitdirectory = true;
-    input.addEventListener('change', () => {
-      const f = input.files && input.files[0];
-      if (!f) { resolve(null); return; }
-      let p = f.path;
-      try {
-        const { webUtils } = require('electron');
-        if (!p && webUtils) p = webUtils.getPathForFile(f);
-      } catch (e) { /* ignore */ }
-      if (!p) { resolve(null); return; }
-      const nodePath = require('path');
-      const depth = (f.webkitRelativePath || '').split('/').length - 1;
-      let dir = p;
-      for (let i = 0; i < depth; i++) dir = nodePath.dirname(dir);
-      resolve(dir);
-    });
-    input.click();
-  });
-}
-
-module.exports = { VaultSource, FsSource, MobileFsSource, createFolderSource, deviceFoldersSupport, pickFolder };
+module.exports = { VaultSource, FsSource, MobileFsSource, createFolderSource, deviceFoldersSupport };

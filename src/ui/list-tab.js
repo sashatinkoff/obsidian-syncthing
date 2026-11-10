@@ -8,6 +8,8 @@ const { formatDate, formatSize, relativeAge, plural, basename } = require('../ut
 const { button, icon, chip, statCard, emptyState, avatar } = require('./dom');
 const { CATEGORIES, CATEGORY_ORDER } = require('../io/bulk');
 const { renderBulkPanel, SAFE } = require('./bulk-panel');
+const { pickFolder } = require('./folder-picker');
+const { deviceFoldersSupport } = require('../io/sources');
 
 const PAGE = 50;
 const CHIP_TONE = { ok: 'ok', info: 'manual', warn: 'conflict', conflict: 'conflict' };
@@ -51,7 +53,6 @@ function renderListTab(view, el) {
   statCard(stats, { label: 'Устройств', value: devices.size, ico: 'smartphone' });
 
   renderSources(view, page, scan);
-  renderHidden(view, page, scan);
   if (groups.length) renderBulkPanel(view, page, scan);
 
   if (!groups.length) {
@@ -205,10 +206,15 @@ function renderSources(view, page, scan) {
   const head = strip.createDiv('scr-sources-head');
   icon(head, 'folder-search');
   head.createSpan({ text: 'Проверенные папки' });
-  button(head, {
-    text: 'Добавить папку', icon: 'folder-plus', variant: 'ghost',
-    onClick: () => { view.app.setting.open(); view.app.setting.openTabById(view.core.manifest.id); },
-  });
+  if (deviceFoldersSupport(view.app)) {
+    button(head, {
+      text: 'Добавить папку', icon: 'folder-plus', variant: 'ghost',
+      onClick: async () => {
+        const p = await pickFolder(view.app, { title: 'Папка Syncthing для проверки конфликтов' });
+        if (p) await view.core.settingTab.addFolder({ path: p });
+      },
+    });
+  }
   const row = strip.createDiv('scr-sources-row');
   for (const s of sources) {
     const card = row.createDiv({ cls: ['scr-source'].concat(s.ok ? [] : ['is-error']).concat(state.source === s.id ? ['is-active'] : []) });
@@ -227,24 +233,6 @@ function renderSources(view, page, scan) {
       card.setAttr('title', state.source === s.id ? 'Показать все папки' : 'Показать конфликты только этой папки');
     }
   }
-}
-
-/** Предупреждение о копиях в исключённых папках: плагин их не показывает, а Syncthing — да. */
-function renderHidden(view, page, scan) {
-  const hidden = scan.hidden || [];
-  if (!hidden.length) return;
-  const n = hidden.length;
-  const folders = [...new Set(hidden.map((h) => h.path.split('/')[0]))].join(', ');
-  const b = page.createDiv('scr-banner scr-banner-warn scr-hidden');
-  icon(b, 'eye-off');
-  const body = b.createDiv('scr-hidden-body');
-  body.createDiv({
-    text: `В исключённых папках (${folders}) ${plural(n, 'лежит', 'лежат', 'лежат')} ${n.toLocaleString('ru-RU')} ${plural(n, 'файл', 'файла', 'файлов')} с именем *.sync-conflict-*. `
-      + 'Здесь они не разбираются, но Syncthing считает их конфликтами. Обычно это уже разобранные копии, убранные в корзину.',
-  });
-  const row = body.createDiv('scr-hidden-actions');
-  button(row, { text: 'Обезвредить', icon: 'file-check', variant: 'soft', title: 'Переименовать в *.resolved-conflict-*, содержимое сохранится', onClick: () => view.core.cleanHidden('neutralize', true) });
-  button(row, { text: 'Удалить насовсем', icon: 'trash-2', variant: 'ghost', onClick: () => view.core.cleanHidden('delete', true) });
 }
 
 module.exports = { renderListTab, copyKey };

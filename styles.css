@@ -761,6 +761,27 @@
 .is-mobile .scr-bulk-head .scr-btn-primary { width: 100%; }
 .scr-bulk-note { margin: 12px 0 0; }
 
-/* Копии в исключённых папках */
-.scr-hidden-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.scr-hidden-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Выбор папки */
+.scr-picker { width: min(620px, 94vw); }
+.scr-picker .modal-content { display: flex; flex-direction: column; gap: 10px; }
+.scr-picker-quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.scr-picker-crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; background: var(--background-secondary); font-size: 0.9em; }
+.scr-crumb { background: none; border: none; box-shadow: none; padding: 2px 6px; height: auto; border-radius: 6px; color: var(--scr-accent-strong, #059669); cursor: pointer; font-weight: 600; }
+.scr-crumb:hover { background: var(--background-modifier-hover); }
+.scr-crumb-sep { color: var(--text-faint); }
+.scr-picker-list { max-height: 50vh; overflow: auto; border: 1px solid var(--background-modifier-border); border-radius: 12px; }
+.scr-picker-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; }
+.scr-picker-row + .scr-picker-row { border-top: 1px solid var(--background-modifier-border); }
+.scr-picker-row:hover { background: var(--background-modifier-hover); }
+.scr-picker-row .scr-ico { color: var(--scr-accent-strong, #059669); }
+.scr-picker-row.is-up { color: var(--text-muted); }
+.scr-picker-row.is-disabled { opacity: 0.55; cursor: default; }
+.scr-picker-st-body { flex: 1; min-width: 0; }
+.scr-picker-st-name { font-weight: 600; }
+.scr-picker-st-path { font-size: 0.8em; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scr-picker-foot { align-items: center; }
+.scr-picker-current { flex: 1; min-width: 0; font-size: 0.8em; color: var(--text-muted); word-break: break-all; font-family: var(--font-monospace); }
+.scr-settings .scr-manual-path { margin: 4px 0 12px; }
+.scr-settings .scr-manual-path summary { cursor: pointer; color: var(--text-muted); font-size: 0.88em; }
+.is-mobile .scr-picker-foot { flex-wrap: wrap; }
+.is-mobile .scr-picker-current { flex-basis: 100%; }

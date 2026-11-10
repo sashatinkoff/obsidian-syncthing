@@ -297,7 +297,7 @@ class ConflictView extends ItemView {
 
   removeModeText() {
     const m = this.core.settings.removeMode;
-    return m === 'delete' ? 'будут удалены насовсем' : m === 'system' ? 'уйдут в системную корзину' : 'уйдут в корзину Obsidian (.trash) под именем *.resolved-conflict-*';
+    return m === 'delete' ? 'будут удалены насовсем' : m === 'system' ? 'уйдут в системную корзину' : 'уйдут в корзину Obsidian (.trash)';
   }
 
   /** Пакетное действие над целой категорией. */
